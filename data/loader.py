@@ -62,14 +62,14 @@ def get_spectrogram_feature(filepath):
     amag = stft.numpy();
     feat = torch.FloatTensor(amag)
     feat = torch.FloatTensor(feat).transpose(0, 1)
-    return feat''' # stft
+    return feat'''
     y, sr = librosa.load(filepath, SAMPLE_RATE)
     # wav_length = len(y)/sr
     frame_length = N_FFT/SAMPLE_RATE
     frame_stride = 0.010
     input_nfft = int(round(sr*frame_length))
     input_stride = int(round(sr*frame_stride))
-    S = librosa.feature.melspectrogram(y=y, n_mels=256, n_fft=input_nfft, hop_length=input_stride)
+    S = librosa.feature.melspectrogram(y=y, n_mels=128, n_fft=input_nfft, hop_length=input_stride)
     feat = torch.FloatTensor(S)
     feat = torch.FloatTensor(feat).transpose(0, 1)
     return feat
@@ -86,7 +86,7 @@ def get_script(filepath, bos_id, eos_id):
     result.append(eos_id)
     return result
 
-class BaseDataset(Dataset): # Return spectogram and label
+class BaseDataset(Dataset):
     def __init__(self, wav_paths, script_paths, bos_id=1307, eos_id=1308):
         self.wav_paths = wav_paths
         self.script_paths = script_paths

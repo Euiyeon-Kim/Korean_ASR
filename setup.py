@@ -1,4 +1,4 @@
-#nsml: nsml/ml:cuda9.0-cudnn7-tf-1.11torch1.0keras2.2
+#nsml: nvcr.io/nvidia/pytorch:19.06-py3
 from distutils.core import setup
 import setuptools
 
