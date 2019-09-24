@@ -36,7 +36,8 @@ import Levenshtein as Lev
 
 import data.wavio as wavio
 import data.label_loader as label_loader
-from data.loader import *
+#from data.loader import *
+from data.specaug_loader import *
 from models import EncoderRNN, DecoderRNN, Seq2seq, EncoderTrans, DecoderTrans
 from utils.Visual import Visual
 
@@ -345,15 +346,17 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
+    # Setting device
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device('cuda' if args.cuda else 'cpu')
 
-    # N_FFT: defined in loader.py
+    # Feature extractor
     if args.use_stft:
         feature_size = N_FFT / 2 + 1
     else:
         feature_size = args.mels
 
+    # Actual model
     if args.use_rnn:
         enc = EncoderRNN(feature_size, args.hidden_size,
                         input_dropout_p=args.dropout, dropout_p=args.dropout,
@@ -366,96 +369,98 @@ def main():
 
         model = Seq2seq(enc, dec)
         model.flatten_parameters()
+        
+        for param in model.parameters():
+            param.data.uniform_(-0.08, 0.08)
+
+        model = nn.DataParallel(model).to(device)
+
+        optimizer = optim.Adam(model.module.parameters(), lr=args.lr)
+        criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=PAD_token).to(device)
+
+        bind_model(model, optimizer)
+
+        if args.pause == 1:
+            nsml.paused(scope=locals())
+
+        if args.mode != "train":
+            return
+
+        data_list = os.path.join(DATASET_PATH, 'train_data', 'data_list.csv')
+        wav_paths = list()
+        script_paths = list()
+
+        with open(data_list, 'r') as f:
+            for line in f:
+                # line: "aaa.wav,aaa.label"
+
+                wav_path, script_path = line.strip().split(',')
+                wav_paths.append(os.path.join(DATASET_PATH, 'train_data', wav_path))
+                script_paths.append(os.path.join(DATASET_PATH, 'train_data', script_path))
+
+        best_loss = 1e10
+        begin_epoch = 0
+
+        # load all target scripts for reducing disk i/o
+        target_path = os.path.join(DATASET_PATH, 'train_label')
+        load_targets(target_path)
+
+        train_batch_num, train_dataset_list, valid_dataset = split_dataset(args, wav_paths, script_paths, valid_ratio=0.05)
+
+        logger.info('start')
+        
+        if args.visdom:
+            train_visual = Visual(train_batch_num)
+            eval_visual = Visual(1)
+
+        train_begin = time.time()
+
+        for epoch in range(begin_epoch, args.max_epochs):
+
+            train_queue = queue.Queue(args.workers * 2)
+
+            train_loader = MultiLoader(train_dataset_list, train_queue, args.batch_size, args.workers)
+            train_loader.start()
+
+            if args.visdom:
+                train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
+            else:
+                train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing)
+
+            logger.info('Epoch %d (Training) Loss %0.4f CER %0.4f' % (epoch, train_loss, train_cer))
+
+            train_loader.join()
+
+            valid_queue = queue.Queue(args.workers * 2)
+            valid_loader = BaseDataLoader(valid_dataset, valid_queue, args.batch_size, 0)
+            valid_loader.start()
+
+            if args.visdom:
+                eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device, eval_visual)
+            else:
+                eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device)
+
+            logger.info('Epoch %d (Evaluate) Loss %0.4f CER %0.4f' % (epoch, eval_loss, eval_cer))
+
+            valid_loader.join()
+
+            nsml.report(False,
+                step=epoch, train_epoch__loss=train_loss, train_epoch__cer=train_cer,
+                eval__loss=eval_loss, eval__cer=eval_cer)
+
+            best_model = (eval_loss < best_loss)
+            nsml.save(args.save_name)
+
+            if best_model:
+                nsml.save('best')
+                best_loss = eval_loss
+
     else:
         enc = EncoderTrans()
         dec = DecoderTrans()
         model = Attention(enc, dec)
 
 
-    for param in model.parameters():
-        param.data.uniform_(-0.08, 0.08)
-
-    model = nn.DataParallel(model).to(device)
-
-    optimizer = optim.Adam(model.module.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=PAD_token).to(device)
-
-    bind_model(model, optimizer)
-
-    if args.pause == 1:
-        nsml.paused(scope=locals())
-
-    if args.mode != "train":
-        return
-
-    data_list = os.path.join(DATASET_PATH, 'train_data', 'data_list.csv')
-    wav_paths = list()
-    script_paths = list()
-
-    with open(data_list, 'r') as f:
-        for line in f:
-            # line: "aaa.wav,aaa.label"
-
-            wav_path, script_path = line.strip().split(',')
-            wav_paths.append(os.path.join(DATASET_PATH, 'train_data', wav_path))
-            script_paths.append(os.path.join(DATASET_PATH, 'train_data', script_path))
-
-    best_loss = 1e10
-    begin_epoch = 0
-
-    # load all target scripts for reducing disk i/o
-    target_path = os.path.join(DATASET_PATH, 'train_label')
-    load_targets(target_path)
-
-    train_batch_num, train_dataset_list, valid_dataset = split_dataset(args, wav_paths, script_paths, valid_ratio=0.05)
-
-    logger.info('start')
-    
-    if args.visdom:
-        train_visual = Visual(train_batch_num)
-        eval_visual = Visual(1)
-
-    train_begin = time.time()
-
-    for epoch in range(begin_epoch, args.max_epochs):
-
-        train_queue = queue.Queue(args.workers * 2)
-
-        train_loader = MultiLoader(train_dataset_list, train_queue, args.batch_size, args.workers)
-        train_loader.start()
-
-        if args.visdom:
-            train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
-        else:
-            train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing)
-
-        logger.info('Epoch %d (Training) Loss %0.4f CER %0.4f' % (epoch, train_loss, train_cer))
-
-        train_loader.join()
-
-        valid_queue = queue.Queue(args.workers * 2)
-        valid_loader = BaseDataLoader(valid_dataset, valid_queue, args.batch_size, 0)
-        valid_loader.start()
-
-        if args.visdom:
-            eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device, eval_visual)
-        else:
-            eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device)
-
-        logger.info('Epoch %d (Evaluate) Loss %0.4f CER %0.4f' % (epoch, eval_loss, eval_cer))
-
-        valid_loader.join()
-
-        nsml.report(False,
-            step=epoch, train_epoch__loss=train_loss, train_epoch__cer=train_cer,
-            eval__loss=eval_loss, eval__cer=eval_cer)
-
-        best_model = (eval_loss < best_loss)
-        nsml.save(args.save_name)
-
-        if best_model:
-            nsml.save('best')
-            best_loss = eval_loss
 
 if __name__ == "__main__":
     main()
