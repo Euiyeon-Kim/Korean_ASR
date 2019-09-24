@@ -37,7 +37,7 @@ import Levenshtein as Lev
 import data.wavio as wavio
 import data.label_loader as label_loader
 from data.loader import *
-from models import EncoderRNN, DecoderRNN, Seq2seq
+from models import EncoderRNN, DecoderRNN, Seq2seq, EncoderTrans, DecoderTrans
 from utils.Visual import Visual
 
 import nsml
@@ -48,11 +48,14 @@ index2char = dict()
 SOS_token = 0
 EOS_token = 0
 PAD_token = 0
+SAMPLE = True
 
+# Configure dataset directory
 if HAS_DATASET == False:
-    #DATASET_PATH = './sample_dataset'
-    DATASET_PATH='/mnt/hdd0/datasets/Speech_sample'
-
+    if SAMPLE:
+        DATASET_PATH = '/mnt/hdd0/datasets/Speech_sample'
+    else:
+        DATASET_PATH='/mnt/hdd0/datasets/Speech'
 DATASET_PATH = os.path.join(DATASET_PATH, 'train')
 
 def label_to_string(labels):
@@ -76,6 +79,7 @@ def label_to_string(labels):
 
         return sents
 
+# For CER
 def char_distance(ref, hyp):
     ref = ref.replace(' ', '') 
     hyp = hyp.replace(' ', '') 
@@ -85,6 +89,7 @@ def char_distance(ref, hyp):
 
     return dist, length 
 
+# For CER
 def get_distance(ref_labels, hyp_labels, display=False):
     total_dist = 0
     total_length = 0
@@ -201,7 +206,7 @@ def evaluate(model, dataloader, queue, criterion, device, visual=None):
     total_sent_num = 0
 
     model.eval()
-
+ 
     with torch.no_grad():
         while True:
             feats, scripts, feat_lengths, script_lengths = queue.get()
@@ -229,28 +234,28 @@ def evaluate(model, dataloader, queue, criterion, device, visual=None):
             total_dist += dist
             total_length += length
             total_sent_num += target.size(0)
-    if visual:
+    if visual:                                                                      
         vis_log = {'Eval Loss':total_loss/total_num, 'Eval_CER':total_dist/total_length}
         visual.log(vis_log)
     logger.info('evaluate() completed')
     return total_loss / total_num, total_dist / total_length
 
 def bind_model(model, optimizer=None):
-    def load(filename, **kwargs):
+    def load(filename, **kwargs):    # model load
         state = torch.load(os.path.join(filename, 'model.pt'))
         model.load_state_dict(state['model'])
         if 'optimizer' in state and optimizer:
             optimizer.load_state_dict(state['optimizer'])
         print('Model loaded')
 
-    def save(filename, **kwargs):
+    def save(filename, **kwargs):    # model save
         state = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict()
         }
         torch.save(state, os.path.join(filename, 'model.pt'))
 
-    def infer(wav_path):
+    def infer(wav_path):             # model inference
         model.eval()
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -291,10 +296,10 @@ def split_dataset(config, wav_paths, script_paths, valid_ratio=0.05):
         train_dataset_list.append(BaseDataset(
                                         wav_paths[train_begin_raw_id:train_end_raw_id],
                                         script_paths[train_begin_raw_id:train_end_raw_id],
-                                        SOS_token, EOS_token))
+                                        SOS_token, EOS_token, config.use_stft, config.mels))
         train_begin = train_end 
 
-    valid_dataset = BaseDataset(wav_paths[train_end_raw_id:], script_paths[train_end_raw_id:], SOS_token, EOS_token)
+    valid_dataset = BaseDataset(wav_paths[train_end_raw_id:], script_paths[train_end_raw_id:], SOS_token, EOS_token, config.use_stft, config.mels)
 
     return train_batch_num, train_dataset_list, valid_dataset
 
@@ -324,6 +329,9 @@ def main():
     parser.add_argument('--mode', type=str, default='train')
     parser.add_argument("--pause", type=int, default=0)
     parser.add_argument("--visdom", type=bool, default=False)
+    parser.add_argument("--use_stft", type=bool, default=False)
+    parser.add_argument("--mels", type=int, default=256)
+    parser.add_argument("--use_rnn", type=bool, default=True)
 
     args = parser.parse_args()
 
@@ -332,6 +340,7 @@ def main():
     EOS_token = char2index['</s>']
     PAD_token = char2index['_']
 
+    # Setting seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -340,20 +349,28 @@ def main():
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     # N_FFT: defined in loader.py
-    feature_size = 128
-    #feature_size = N_FFT / 2 + 1
+    if args.use_stft:
+        feature_size = N_FFT / 2 + 1
+    else:
+        feature_size = args.mels
 
-    enc = EncoderRNN(feature_size, args.hidden_size,
-                     input_dropout_p=args.dropout, dropout_p=args.dropout,
-                     n_layers=args.layer_size, bidirectional=args.bidirectional, rnn_cell='gru', variable_lengths=False)
+    if args.use_rnn:
+        enc = EncoderRNN(feature_size, args.hidden_size,
+                        input_dropout_p=args.dropout, dropout_p=args.dropout,
+                        n_layers=args.layer_size, bidirectional=args.bidirectional, rnn_cell='gru', variable_lengths=False)
 
-    dec = DecoderRNN(len(char2index), args.max_len, args.hidden_size * (2 if args.bidirectional else 1),
-                     SOS_token, EOS_token,
-                     n_layers=args.layer_size, rnn_cell='gru', bidirectional=args.bidirectional,
-                     input_dropout_p=args.dropout, dropout_p=args.dropout, use_attention=args.use_attention)
+        dec = DecoderRNN(len(char2index), args.max_len, args.hidden_size * (2 if args.bidirectional else 1),
+                        SOS_token, EOS_token,
+                        n_layers=args.layer_size, rnn_cell='gru', bidirectional=args.bidirectional,
+                        input_dropout_p=args.dropout, dropout_p=args.dropout, use_attention=args.use_attention)
 
-    model = Seq2seq(enc, dec)
-    model.flatten_parameters()
+        model = Seq2seq(enc, dec)
+        model.flatten_parameters()
+    else:
+        enc = EncoderTrans()
+        dec = DecoderTrans()
+        model = Attention(enc, dec)
+
 
     for param in model.parameters():
         param.data.uniform_(-0.08, 0.08)

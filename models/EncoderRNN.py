@@ -20,7 +20,7 @@ import sys
 import math
 import torch.nn as nn
 
-from .baseRNN import BaseRNN
+from .BaseRNN import BaseRNN
 
 class EncoderRNN(BaseRNN):
     r"""
