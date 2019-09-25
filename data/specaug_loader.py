@@ -66,7 +66,6 @@ def get_spectrogram_feature(filepath, use_stft, mels, mode):
         amag = stft.numpy()
         feat = torch.FloatTensor(amag)
         feat = torch.FloatTensor(feat).transpose(0, 1)
-        print(feat.shape)
         return feat
     else:
         y, sr = librosa.load(filepath, SAMPLE_RATE)

@@ -215,7 +215,6 @@ def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, tra
     logger.info('train() start')
 
     begin = epoch_begin = time.time()
-
     while True:
         if queue.empty():
             logger.debug('queue is empty')
@@ -459,20 +458,19 @@ def main():
     parser.add_argument("--pause", type=int, default=0)
     parser.add_argument("--visdom", type=bool, default=False)
     parser.add_argument("--use_stft", type=bool, default=False, help="use stft or log mel + specaugmentation")
-    parser.add_argument("--mels", type=int, default=256)
+    parser.add_argument("--mels", type=int, default=128)
     parser.add_argument("--use_rnn", type=bool, default=False)
 
     # Low Frame Rate (stacking and skipping frames)
     parser.add_argument('--LFR_m', default=4, type=int, help='Low Frame Rate: number of frames to stack')
     parser.add_argument('--LFR_n', default=3, type=int, help='Low Frame Rate: number of frames to skip')
     # EncoderTrans
-    parser.add_argument('--d_input', default=80, type=int, help='Dim of encoder input (before LFR)')
     parser.add_argument('--n_layers_enc', default=2, type=int, help='Number of encoder stacks')
-    parser.add_argument('--n_head', default=8, type=int, help='Number of Multi Head Attention (MHA)')
+    parser.add_argument('--n_head', default=4, type=int, help='Number of Multi Head Attention (MHA)')
     parser.add_argument('--d_k', default=64, type=int, help='Dimension of key')
-    parser.add_argument(ƒ'--d_v', default=64, type=int, help='Dimension of value')
+    parser.add_argument('--d_v', default=64, type=int, help='Dimension of value')
     parser.add_argument('--d_model', default=512, type=int, help='Dimension of model')
-    parser.add_argument('--d_inner', default=2048, type=int, help='Dimension of inner')
+    parser.add_argument('--d_inner', default=512, type=int, help='Dimension of inner')
     parser.add_argument('--dropout', default=0.1, type=float, help='Dropout rate')
     parser.add_argument('--pe_maxlen', default=5000, type=int, help='Positional Encoding max len')
     # Decoder Trans
