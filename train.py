@@ -38,7 +38,13 @@ import data.wavio as wavio
 import data.label_loader as label_loader
 #from data.loader import *
 from data.specaug_loader import *
-from models import EncoderRNN, DecoderRNN, Seq2seq, EncoderTrans, DecoderTrans, Transformer
+from models import EncoderRNN, DecoderRNN, Seq2seq
+from models.EncoderTrans import EncoderTrans
+from models.DecoderTrans import DecoderTrans
+from models.Transformer import Transformer
+from models.Transoptrimizer import TransformerOptimizer
+from models.Solver import Solver
+
 from utils.Visual import Visual
 
 import nsml
@@ -315,7 +321,6 @@ def main():
     parser = argparse.ArgumentParser(description='Speech hackathon Baseline')
     parser.add_argument('--hidden_size', type=int, default=512, help='hidden size of model (default: 256)')
     parser.add_argument('--layer_size', type=int, default=3, help='number of layers of model (default: 3)')
-    parser.add_argument('--dropout', type=float, default=0.2, help='dropout rate in training (default: 0.2)')
     parser.add_argument('--bidirectional', action='store_true', help='use bidirectional RNN for encoder (default: False)')
     parser.add_argument('--use_attention', action='store_true', help='use attention between encoder-decoder (default: False)')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size in training (default: 32)')
@@ -353,7 +358,9 @@ def main():
     parser.add_argument('--tgt_emb_prj_weight_sharing', default=1, type=int, help='share decoder embedding with decoder projection')
     # TransLoss
     parser.add_argument('--label_smoothing', default=0.1, type=float, help='label smoothing')
-
+    # Optimizer
+    parser.add_argument('--k', default=1.0, type=float, help='tunable scalar multiply to learning rate')
+    parser.add_argument('--warmup_steps', default=4000, type=int, help='warmup steps')
     args = parser.parse_args()
 
     char2index, index2char = label_loader.load_label('./data/hackathon.labels')
@@ -377,19 +384,21 @@ def main():
         feature_size = args.mels
 
     # Actual model
-    if args.use_rnn:
+    if args.use_rnn:    # RNN structure
+        
+        # Define model
         enc = EncoderRNN(feature_size, args.hidden_size,
                         input_dropout_p=args.dropout, dropout_p=args.dropout,
-                        n_layers=args.layer_size, bidirectional=args.bidirectional, rnn_cell='gru', variable_lengths=False)
-
+                        n_layers=args.layer_size, bidirectional=args.bidirectional, 
+                        rnn_cell='gru', variable_lengths=False)
         dec = DecoderRNN(len(char2index), args.max_len, args.hidden_size * (2 if args.bidirectional else 1),
                         SOS_token, EOS_token,
                         n_layers=args.layer_size, rnn_cell='gru', bidirectional=args.bidirectional,
                         input_dropout_p=args.dropout, dropout_p=args.dropout, use_attention=args.use_attention)
-
         model = Seq2seq(enc, dec)
         model.flatten_parameters()
         
+        # Parameters initialization
         for param in model.parameters():
             param.data.uniform_(-0.08, 0.08)
 
@@ -418,6 +427,7 @@ def main():
                 script_paths.append(os.path.join(DATASET_PATH, 'train_data', script_path))
 
         best_loss = 1e10
+        best_cer = 1e10
         begin_epoch = 0
 
         # load all target scripts for reducing disk i/o
@@ -467,14 +477,19 @@ def main():
                 step=epoch, train_epoch__loss=train_loss, train_epoch__cer=train_cer,
                 eval__loss=eval_loss, eval__cer=eval_cer)
 
-            best_model = (eval_loss < best_loss)
+            best_loss_model = (eval_loss < best_loss)
+            best_cer_model = (eval_cer < best_cer)
             nsml.save(args.save_name)
 
-            if best_model:
-                nsml.save('best')
+            if best_loss_model:
+                nsml.save('best_loss')
                 best_loss = eval_loss
+            if best_cer_model:
+                nsml.save('best_cer')
+                best_cer = eval_cer
 
-    else:
+    else:           # Transformer structure
+        # Define model
         enc = EncoderTrans(args.d_input * args.LFR_m, args.n_layers_enc, args.n_head,
                       args.d_k, args.d_v, args.d_model, args.d_inner,
                       dropout=args.dropout, pe_maxlen=args.pe_maxlen)
@@ -486,6 +501,45 @@ def main():
                       pe_maxlen=args.pe_maxlen)
         model = Transformer(enc, dec)
 
+        # Parameter initialization
+        for param in model.parameters():
+            param.data.uniform_(-0.08, 0.08)
+        model = nn.DataParallel(model).to(device)
+
+        optimizer = TransformerOptimizer(  torch.optim.Adam(model.parameters(), 
+                                            betas=(0.9, 0.98), eps=1e-09),
+                                            args.k, args.d_model, args.warmup_steps)
+        bind_model(args, model, optimizer)
+
+        if args.pause == 1:
+            nsml.paused(scope=locals())
+
+        if args.mode != "train":
+            return
+
+        data_list = os.path.join(DATASET_PATH, 'train_data', 'data_list.csv')
+        wav_paths = list()
+        script_paths = list()
+
+        with open(data_list, 'r') as f:
+            for line in f:
+                # line: "aaa.wav,aaa.label"
+                wav_path, script_path = line.strip().split(',')
+                wav_paths.append(os.path.join(DATASET_PATH, 'train_data', wav_path))
+                script_paths.append(os.path.join(DATASET_PATH, 'train_data', script_path))
+
+        best_loss = 1e10
+        best_cer = 1e10
+        begin_epoch = 0
+
+        # load all target scripts for reducing disk i/o
+        target_path = os.path.join(DATASET_PATH, 'train_label')
+        load_targets(target_path)
+
+        train_batch_num, train_dataset_list, valid_dataset = split_dataset(args, wav_paths, script_paths, valid_ratio=0.05)
+
+        solver = Solver(data, model, optimizer, args)
+        solver.train()
 
 if __name__ == "__main__":
     main()
