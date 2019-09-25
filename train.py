@@ -200,7 +200,6 @@ def trainRNN(model, total_batch_size, queue, criterion, optimizer, device, train
     logger.info('train() completed')
     return total_loss / total_num, total_dist / total_length
 
-
 trainRNN.cumulative_batch_count = 0
 
 def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, train_begin, train_loader_count, print_batch=5, teacher_forcing_ratio=1, visual=None, label_smoothing=0.1):
@@ -285,7 +284,6 @@ def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, tra
     logger.info('train() completed')
     return total_loss / total_num, total_dist / total_length
 
-
 trainTrans.cumulative_batch_count = 0
 
 def evaluateRNN(model, dataloader, queue, criterion, device, visual=None):
@@ -330,6 +328,47 @@ def evaluateRNN(model, dataloader, queue, criterion, device, visual=None):
         visual.log(vis_log)
     logger.info('evaluate() completed')
     return total_loss / total_num, total_dist / total_length
+
+def evaluateTrans(model, dataloader, queue, criterion, device, visual=None):
+    logger.info('evaluate() start')
+    total_loss = 0.
+    total_num = 0
+    total_dist = 0
+    total_length = 0
+    total_sent_num = 0
+
+    model.eval()
+ 
+    with torch.no_grad():
+        while True:
+            feats, scripts, feat_lengths, script_lengths = queue.get()
+            if feats.shape[0] == 0:
+                break
+
+            feats = feats.to(device)
+            scripts = scripts.to(device)
+
+            src_len = scripts.size(1)
+            target = scripts[:, 1:]
+
+            pred, gold = model(feats, feat_lengths, scripts)
+            y_hat = pred.max(-1)[1]
+
+            loss, n_correct = cal_performance(pred, gold, smoothing=label_smoothing)
+            total_loss += loss.item()
+            total_num += sum(feat_lengths)
+
+            display = random.randrange(0, 100) == 0
+            dist, length = get_distance(target, y_hat, display=display)
+            total_dist += dist
+            total_length += length
+            total_sent_num += target.size(0)
+    if visual:                                                                      
+        vis_log = {'Eval Loss':total_loss/total_num, 'Eval_CER':total_dist/total_length}
+        visual.log(vis_log)
+    logger.info('evaluate() completed')
+    return total_loss / total_num, total_dist / total_length
+
 
 def bind_model(args, model, optimizer=None):
     def load(filename, **kwargs):    # model load
