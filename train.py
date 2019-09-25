@@ -192,16 +192,16 @@ def trainRNN(model, total_batch_size, queue, criterion, optimizer, device, train
             begin = time.time()
 
             nsml.report(False,
-                        step=train.cumulative_batch_count, train_step__loss=total_loss/total_num,
+                        step=trainRNN.cumulative_batch_count, train_step__loss=total_loss/total_num,
                         train_step__cer=total_dist/total_length)
         batch += 1
-        train.cumulative_batch_count += 1
+        trainRNN.cumulative_batch_count += 1
 
     logger.info('train() completed')
     return total_loss / total_num, total_dist / total_length
 
 
-train.cumulative_batch_count = 0
+trainRNN.cumulative_batch_count = 0
 
 def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, train_begin, train_loader_count, print_batch=5, teacher_forcing_ratio=1, visual=None, label_smoothing=0.1):
     total_loss = 0.
@@ -241,14 +241,9 @@ def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, tra
         target = scripts[:, 1:]
 
         pred, gold = model(feats, feat_lengths, scripts)
-        print(pred)
         loss, n_correct = cal_performance(pred, gold, smoothing=label_smoothing)
-            
-        logit = torch.stack(logit, dim=1).to(device)
+        y_hat = pred.max(-1)[1]
 
-        y_hat = logit.max(-1)[1]
-
-        loss = criterion(logit.contiguous().view(-1, logit.size(-1)), target.contiguous().view(-1))
         total_loss += loss.item()
         total_num += sum(feat_lengths)
 
@@ -282,16 +277,16 @@ def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, tra
             begin = time.time()
 
             nsml.report(False,
-                        step=train.cumulative_batch_count, train_step__loss=total_loss/total_num,
+                        step=trainTrans.cumulative_batch_count, train_step__loss=total_loss/total_num,
                         train_step__cer=total_dist/total_length)
         batch += 1
-        train.cumulative_batch_count += 1
+        trainTrans.cumulative_batch_count += 1
 
     logger.info('train() completed')
     return total_loss / total_num, total_dist / total_length
 
 
-train.cumulative_batch_count = 0
+trainTrans.cumulative_batch_count = 0
 
 def evaluateRNN(model, dataloader, queue, criterion, device, visual=None):
     logger.info('evaluate() start')
@@ -433,7 +428,7 @@ def main():
     parser.add_argument('--LFR_n', default=3, type=int, help='Low Frame Rate: number of frames to skip')
     # EncoderTrans
     parser.add_argument('--d_input', default=80, type=int, help='Dim of encoder input (before LFR)')
-    parser.add_argument('--n_layers_enc', default=6, type=int, help='Number of encoder stacks')
+    parser.add_argument('--n_layers_enc', default=2, type=int, help='Number of encoder stacks')
     parser.add_argument('--n_head', default=8, type=int, help='Number of Multi Head Attention (MHA)')
     parser.add_argument('--d_k', default=64, type=int, help='Dimension of key')
     parser.add_argument('--d_v', default=64, type=int, help='Dimension of value')
@@ -443,7 +438,7 @@ def main():
     parser.add_argument('--pe_maxlen', default=5000, type=int, help='Positional Encoding max len')
     # Decoder Trans
     parser.add_argument('--d_word_vec', default=512, type=int, help='Dim of decoder embedding')
-    parser.add_argument('--n_layers_dec', default=6, type=int, help='Number of decoder stacks')
+    parser.add_argument('--n_layers_dec', default=2, type=int, help='Number of decoder stacks')
     parser.add_argument('--tgt_emb_prj_weight_sharing', default=1, type=int, help='share decoder embedding with decoder projection')
     # TransLoss
     parser.add_argument('--label_smoothing', default=0.1, type=float, help='label smoothing')
@@ -579,7 +574,7 @@ def main():
 
     else:           # Transformer structure
         # Define model
-        enc = EncoderTrans(args.d_input * args.LFR_m, args.n_layers_enc, args.n_head,
+        enc = EncoderTrans(feature_size, args.n_layers_enc, args.n_head,
                       args.d_k, args.d_v, args.d_model, args.d_inner,
                       dropout=args.dropout, pe_maxlen=args.pe_maxlen)
         dec = DecoderTrans(SOS_token, EOS_token, len(char2index),
@@ -642,7 +637,7 @@ def main():
             if args.visdom:
                 train_loss, train_cer = trainTrans(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
             else:
-                train_loss, train_cer = trainTrans(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, args.label_smoothing)
+                train_loss, train_cer = trainTrans(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, label_smoothing=args.label_smoothing)
 
             logger.info('Epoch %d (Training) Loss %0.4f CER %0.4f' % (epoch, train_loss, train_cer))
 
