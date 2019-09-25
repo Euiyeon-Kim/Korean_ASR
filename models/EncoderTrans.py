@@ -7,13 +7,14 @@ from utils.utils import get_non_pad_mask, get_attn_pad_mask
 
 sys.path.append("..")
 
-class Encoder(nn.Module):
-    """Encoder of Transformer including self-attention and feed forward.
+class EncoderTrans(nn.Module):
+    """
+        Encoder of Transformer including self-attention and feed forward.
     """
 
     def __init__(self, d_input, n_layers, n_head, d_k, d_v,
                  d_model, d_inner, dropout=0.1, pe_maxlen=5000):
-        super(Encoder, self).__init__()
+        super(EncoderTrans, self).__init__()
         # parameters
         self.d_input = d_input
         self.n_layers = n_layers
