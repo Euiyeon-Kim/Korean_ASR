@@ -48,7 +48,7 @@ def load_targets(path):
             key, target = line.strip().split(',')
             target_dict[key] = target
 
-def get_spectrogram_feature(filepath, use_stft, mels):
+def get_spectrogram_feature(filepath, use_stft, mels, mode):
     if use_stft:
         (rate, width, sig) = wavio.readwav(filepath)
         sig = sig.ravel()
@@ -66,6 +66,7 @@ def get_spectrogram_feature(filepath, use_stft, mels):
         amag = stft.numpy()
         feat = torch.FloatTensor(amag)
         feat = torch.FloatTensor(feat).transpose(0, 1)
+        print(feat.shape)
         return feat
     else:
         y, sr = librosa.load(filepath, SAMPLE_RATE)
@@ -75,15 +76,46 @@ def get_spectrogram_feature(filepath, use_stft, mels):
         input_nfft = int(round(sr*frame_length))
         input_stride = int(round(sr*frame_stride))
         S = librosa.feature.melspectrogram(y=y, n_mels=mels, n_fft=input_nfft, hop_length=input_stride)
-        feat = torch.FloatTensor(S)
-        feat = torch.FloatTensor(feat).transpose(0, 1)
+        #S = librosa.amplitude_to_db(S)
+        if mode == 'train':
+            prob = random.random()
+            if prob < 1/3: # LB
+                shape = S.shape
+                S = np.reshape(S, (-1, shape[0], shape[1]))
+                S = torch.from_numpy(S)
+                S = spec_augment(mel_spectrogram=S, time_warping_para=80, frequency_masking_para=27,
+                        time_masking_para=100, frequency_mask_num=1, time_mask_num=1)
+                S = torch.squeeze(S)
+            elif prob < 2/3: # LD
+                shape = S.shape
+                S = np.reshape(S, (-1, shape[0], shape[1]))
+                S = torch.from_numpy(S)
+                S = spec_augment(mel_spectrogram=S, time_warping_para=80, frequency_masking_para=27,
+                        time_masking_para=100, frequency_mask_num=2, time_mask_num=2)
+                S = torch.squeeze(S)
+        S = torch.FloatTensor(S)
+        feat = S.transpose(0, 1)
         return feat
 
+def get_script(filepath, bos_id, eos_id):
+    key = filepath.split('/')[-1].split('.')[0]
+    script = target_dict[key]
+    tokens = script.split(' ')
+    result = list()
+    result.append(bos_id)
+    for i in range(len(tokens)):
+        if len(tokens[i]) > 0:
+            result.append(int(tokens[i]))
+    result.append(eos_id)
+    return result
+
 class BaseDataset(Dataset):
-    def __init__(self, wav_paths, script_paths, bos_id=1307, eos_id=1308, mode='train'):
+    def __init__(self, wav_paths, script_paths, bos_id=1307, eos_id=1308, use_stft=False, mels=256, mode='train'):
         self.wav_paths = wav_paths
         self.script_paths = script_paths
         self.bos_id, self.eos_id = bos_id, eos_id
+        self.use_stft = use_stft
+        self.mels = mels
         self.mode = mode
 
     def __len__(self):
@@ -93,7 +125,7 @@ class BaseDataset(Dataset):
         return len(self.wav_paths)
 
     def getitem(self, idx):
-        feat = get_spectrogram_feature(self.wav_paths[idx], self.use_stft, self.mels)
+        feat = get_spectrogram_feature(self.wav_paths[idx], self.use_stft, self.mels, self.mode)
         script = get_script(self.script_paths[idx], self.bos_id, self.eos_id)
         return feat, script
 

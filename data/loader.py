@@ -89,7 +89,7 @@ def get_script(filepath, bos_id, eos_id):
     return result
 
 class BaseDataset(Dataset):
-    def __init__(self, wav_paths, script_paths, bos_id=1307, eos_id=1308, use_stft=False, mels=256):
+    def __init__(self, wav_paths, script_paths, bos_id=1307, eos_id=1308, use_stft=False, mels=256, mode='train'):
         self.wav_paths = wav_paths
         self.script_paths = script_paths
         self.bos_id, self.eos_id = bos_id, eos_id
