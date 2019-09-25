@@ -329,7 +329,7 @@ def evaluateRNN(model, dataloader, queue, criterion, device, visual=None):
     logger.info('evaluate() completed')
     return total_loss / total_num, total_dist / total_length
 
-def evaluateTrans(model, dataloader, queue, criterion, device, visual=None):
+def evaluateTrans(model, dataloader, queue, criterion, device, visual=None, label_smoothing=0.1):
     logger.info('evaluate() start')
     total_loss = 0.
     total_num = 0
@@ -470,7 +470,7 @@ def main():
     parser.add_argument('--n_layers_enc', default=2, type=int, help='Number of encoder stacks')
     parser.add_argument('--n_head', default=8, type=int, help='Number of Multi Head Attention (MHA)')
     parser.add_argument('--d_k', default=64, type=int, help='Dimension of key')
-    parser.add_argument('--d_v', default=64, type=int, help='Dimension of value')
+    parser.add_argument(ƒ'--d_v', default=64, type=int, help='Dimension of value')
     parser.add_argument('--d_model', default=512, type=int, help='Dimension of model')
     parser.add_argument('--d_inner', default=2048, type=int, help='Dimension of inner')
     parser.add_argument('--dropout', default=0.1, type=float, help='Dropout rate')
@@ -689,7 +689,7 @@ def main():
             if args.visdom:
                 eval_loss, eval_cer = evaluateTrans(model, valid_loader, valid_queue, criterion, device, eval_visual)
             else:
-                eval_loss, eval_cer = evaluateTrans(model, valid_loader, valid_queue, criterion, device)
+                eval_loss, eval_cer = evaluateTrans(model, valid_loader, valid_queue, criterion, device, label_smoothing=args.label_smoothing)
 
             logger.info('Epoch %d (Evaluate) Loss %0.4f CER %0.4f' % (epoch, eval_loss, eval_cer))
 
