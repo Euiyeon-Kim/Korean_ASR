@@ -20,10 +20,10 @@ import sys
 import math
 import torch.nn as nn
 
-from .BaseRNN import BaseRNN
+from .baseRNN import BaseRNN
 
 class EncoderRNN(BaseRNN):
-    """
+    r"""
     Applies a multi-layer RNN to an input sequence.
 
     Args:
@@ -71,7 +71,7 @@ class EncoderRNN(BaseRNN):
         Copyright (c) 2017 Sean Naren
         MIT License
         """
-        '''self.conv = nn.Sequential(
+        self.conv = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(41, 11), stride=(2, 2), padding=(20, 5)),
             nn.BatchNorm2d(32),
             nn.Hardtanh(0, 20, inplace=True),
@@ -82,7 +82,7 @@ class EncoderRNN(BaseRNN):
 
         feature_size = math.ceil((feature_size - 11 + 1 + (5*2)) / 2)
         feature_size = math.ceil(feature_size - 11 + 1 + (5*2))
-        feature_size *= 32'''
+        feature_size *= 32
 
         self.rnn = self.rnn_cell(feature_size, hidden_size, n_layers,
                                  batch_first=True, bidirectional=bidirectional, dropout=dropout_p)
@@ -100,20 +100,15 @@ class EncoderRNN(BaseRNN):
             - **output** (batch, seq_len, hidden_size): variable containing the encoded features of the input sequence
             - **hidden** (num_layers * num_directions, batch, hidden_size): variable containing the features in the hidden state h
         """
-        
         input_var = input_var.unsqueeze(1)
-        #x = self.conv(input_var)
-        x = input_var
-        
+        x = self.conv(input_var)
         # BxCxTxD => BxCxDxT
         x = x.transpose(1, 2)
         x = x.contiguous()
         sizes = x.size()
         x = x.view(sizes[0], sizes[1], sizes[2] * sizes[3])
-
         if self.training:
             self.rnn.flatten_parameters()
 
         output, hidden = self.rnn(x)
-
         return output, hidden

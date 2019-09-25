@@ -26,8 +26,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 
-from .AttentionRNN import Attention
-from .BaseRNN import BaseRNN
+from .attention import Attention
+from .baseRNN import BaseRNN
 
 if torch.cuda.is_available():
     import torch.cuda as device
@@ -36,7 +36,7 @@ else:
 
 
 class DecoderRNN(BaseRNN):
-    """
+    r"""
     Provides functionality for decoding in a seq2seq framework, with an option for attention.
     Args:
         vocab_size (int): size of the vocabulary

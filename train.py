@@ -333,7 +333,6 @@ def main():
     parser.add_argument("--use_stft", type=bool, default=False)
     parser.add_argument("--mels", type=int, default=256)
     parser.add_argument("--use_rnn", type=bool, default=True)
-    parser.add_argument('--mode', type=str, default='train')
 
     args = parser.parse_args()
 
