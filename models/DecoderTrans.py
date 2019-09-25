@@ -78,7 +78,6 @@ class DecoderTrans(nn.Module):
         Args:
             padded_input: N x To
             encoder_padded_outputs: N x Ti x H
-
         Returns:
         """
         dec_slf_attn_list, dec_enc_attn_list = [], []

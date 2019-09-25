@@ -44,7 +44,7 @@ from models.DecoderTrans import DecoderTrans
 from models.Transformer import Transformer
 from models.Transoptrimizer import TransformerOptimizer
 from models.Solver import Solver
-
+from models.Transloss import cal_performance
 from utils.Visual import Visual
 
 import nsml
@@ -112,7 +112,7 @@ def get_distance(ref_labels, hyp_labels, display=False):
     return total_dist, total_length
 
 
-def train(model, total_batch_size, queue, criterion, optimizer, device, train_begin, train_loader_count, print_batch=5, teacher_forcing_ratio=1, visual=None):
+def trainRNN(model, total_batch_size, queue, criterion, optimizer, device, train_begin, train_loader_count, print_batch=5, teacher_forcing_ratio=1, visual=None):
     total_loss = 0.
     total_num = 0
     total_dist = 0
@@ -203,8 +203,97 @@ def train(model, total_batch_size, queue, criterion, optimizer, device, train_be
 
 train.cumulative_batch_count = 0
 
+def trainTrans(model, total_batch_size, queue, criterion, optimizer, device, train_begin, train_loader_count, print_batch=5, teacher_forcing_ratio=1, visual=None, label_smoothing=0.1):
+    total_loss = 0.
+    total_num = 0
+    total_dist = 0
+    total_length = 0
+    total_sent_num = 0
+    batch = 0
 
-def evaluate(model, dataloader, queue, criterion, device, visual=None):
+    model.train()
+
+    logger.info('train() start')
+
+    begin = epoch_begin = time.time()
+
+    while True:
+        if queue.empty():
+            logger.debug('queue is empty')
+
+        feats, scripts, feat_lengths, script_lengths = queue.get()
+
+        if feats.shape[0] == 0:
+            # empty feats means closing one loader
+            train_loader_count -= 1
+            logger.debug('left train_loader: %d' % (train_loader_count))
+            if train_loader_count == 0:
+                break
+            else:
+                continue
+
+        optimizer.zero_grad()
+
+        feats = feats.to(device)
+        scripts = scripts.to(device)
+
+        src_len = scripts.size(1)
+        target = scripts[:, 1:]
+
+        pred, gold = model(feats, feat_lengths, scripts)
+        print(pred)
+        loss, n_correct = cal_performance(pred, gold, smoothing=label_smoothing)
+            
+        logit = torch.stack(logit, dim=1).to(device)
+
+        y_hat = logit.max(-1)[1]
+
+        loss = criterion(logit.contiguous().view(-1, logit.size(-1)), target.contiguous().view(-1))
+        total_loss += loss.item()
+        total_num += sum(feat_lengths)
+
+        display = random.randrange(0, 100) == 0
+        dist, length = get_distance(target, y_hat, display=display)
+        total_dist += dist
+        total_length += length
+
+        total_sent_num += target.size(0)
+
+        loss.backward()
+        optimizer.step()
+
+        if visual:
+            vis_log = {'Train Loss':total_loss / total_num, 'Train CER':total_dist / total_length}
+            visual.log(vis_log)
+
+        if batch % print_batch == 0:
+            current = time.time()
+            elapsed = current - begin
+            epoch_elapsed = (current - epoch_begin) / 60.0
+            train_elapsed = (current - train_begin) / 3600.0
+
+            logger.info('batch: {:4d}/{:4d}, loss: {:.4f}, cer: {:.2f}, elapsed: {:.2f}s {:.2f}m {:.2f}h'
+                .format(batch,
+                        #len(dataloader),
+                        total_batch_size,
+                        total_loss / total_num,
+                        total_dist / total_length,
+                        elapsed, epoch_elapsed, train_elapsed))
+            begin = time.time()
+
+            nsml.report(False,
+                        step=train.cumulative_batch_count, train_step__loss=total_loss/total_num,
+                        train_step__cer=total_dist/total_length)
+        batch += 1
+        train.cumulative_batch_count += 1
+
+    logger.info('train() completed')
+    return total_loss / total_num, total_dist / total_length
+
+
+train.cumulative_batch_count = 0
+
+def evaluateRNN(model, dataloader, queue, criterion, device, visual=None):
     logger.info('evaluate() start')
     total_loss = 0.
     total_num = 0
@@ -452,9 +541,9 @@ def main():
             train_loader.start()
 
             if args.visdom:
-                train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
+                train_loss, train_cer = trainRNN(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
             else:
-                train_loss, train_cer = train(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing)
+                train_loss, train_cer = trainRNN(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing)
 
             logger.info('Epoch %d (Training) Loss %0.4f CER %0.4f' % (epoch, train_loss, train_cer))
 
@@ -465,9 +554,9 @@ def main():
             valid_loader.start()
 
             if args.visdom:
-                eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device, eval_visual)
+                eval_loss, eval_cer = evaluateRNN(model, valid_loader, valid_queue, criterion, device, eval_visual)
             else:
-                eval_loss, eval_cer = evaluate(model, valid_loader, valid_queue, criterion, device)
+                eval_loss, eval_cer = evaluateRNN(model, valid_loader, valid_queue, criterion, device)
 
             logger.info('Epoch %d (Evaluate) Loss %0.4f CER %0.4f' % (epoch, eval_loss, eval_cer))
 
@@ -509,6 +598,7 @@ def main():
         optimizer = TransformerOptimizer(  torch.optim.Adam(model.parameters(), 
                                             betas=(0.9, 0.98), eps=1e-09),
                                             args.k, args.d_model, args.warmup_steps)
+        criterion = nn.CrossEntropyLoss(reduction='sum', ignore_index=PAD_token).to(device)
         bind_model(args, model, optimizer)
 
         if args.pause == 1:
@@ -538,8 +628,53 @@ def main():
 
         train_batch_num, train_dataset_list, valid_dataset = split_dataset(args, wav_paths, script_paths, valid_ratio=0.05)
 
-        solver = Solver(data, model, optimizer, args)
-        solver.train()
+        logger.info('start')
+        
+        train_begin = time.time()
+
+        for epoch in range(begin_epoch, args.max_epochs):
+
+            train_queue = queue.Queue(args.workers * 2)
+
+            train_loader = MultiLoader(train_dataset_list, train_queue, args.batch_size, args.workers)
+            train_loader.start()
+
+            if args.visdom:
+                train_loss, train_cer = trainTrans(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, train_visual)
+            else:
+                train_loss, train_cer = trainTrans(model, train_batch_num, train_queue, criterion, optimizer, device, train_begin, args.workers, 10, args.teacher_forcing, args.label_smoothing)
+
+            logger.info('Epoch %d (Training) Loss %0.4f CER %0.4f' % (epoch, train_loss, train_cer))
+
+            train_loader.join()
+
+            valid_queue = queue.Queue(args.workers * 2)
+            valid_loader = BaseDataLoader(valid_dataset, valid_queue, args.batch_size, 0)
+            valid_loader.start()
+
+            if args.visdom:
+                eval_loss, eval_cer = evaluateTrans(model, valid_loader, valid_queue, criterion, device, eval_visual)
+            else:
+                eval_loss, eval_cer = evaluateTrans(model, valid_loader, valid_queue, criterion, device)
+
+            logger.info('Epoch %d (Evaluate) Loss %0.4f CER %0.4f' % (epoch, eval_loss, eval_cer))
+
+            valid_loader.join()
+
+            nsml.report(False,
+                step=epoch, train_epoch__loss=train_loss, train_epoch__cer=train_cer,
+                eval__loss=eval_loss, eval__cer=eval_cer)
+
+            best_loss_model = (eval_loss < best_loss)
+            best_cer_model = (eval_cer < best_cer)
+            nsml.save(args.save_name)
+
+            if best_loss_model:
+                nsml.save('best_loss')
+                best_loss = eval_loss
+            if best_cer_model:
+                nsml.save('best_cer')
+                best_cer = eval_cer
 
 if __name__ == "__main__":
     main()
